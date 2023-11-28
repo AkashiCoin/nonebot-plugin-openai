@@ -107,6 +107,7 @@ class OpenAIClient:
                 tool_choice=None if vision else tool_choice,
                 tools=None if vision else self.tool_func.tools_info(),
                 user=session.user,
+                max_tokens=1024 if vision else None,
             )
 
             # 记录聊天完成内容
