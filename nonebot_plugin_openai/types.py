@@ -85,4 +85,4 @@ class Session(BaseModel):
                     content=preset.prompt, role="system"
                 )
             ]
-        return _preset + self.messages[-self.max_length-1:-1]
+        return _preset + self.messages[-self.max_length:]
