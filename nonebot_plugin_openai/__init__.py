@@ -66,6 +66,8 @@ async def load_func():
     tools_func.register(openai_client.gen_image, ToolCallConfig(name="DALL-E"))
     # 从config.openai_data_path配置的文件夹中的func文件夹中读取出所有开头为func的文件名
     func_dir = os.path.join(config.openai_data_path, 'func')
+    if not os.path.exists(func_dir):
+        os.makedirs(func_dir)
     func_files = [
         f for f in os.listdir(func_dir) 
         if f.startswith('func') and f.endswith('.py')
