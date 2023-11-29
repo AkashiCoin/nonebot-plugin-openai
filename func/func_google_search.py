@@ -30,7 +30,7 @@ async def func_google_search(config: Config, keyword: str, max_results: int = 3)
 
     url = "https://www.googleapis.com/customsearch/v1"
     try:
-        async with AsyncClient(proxies=proxy) as cli:
+        async with AsyncClient() as cli:
             response = (
                 await cli.get(
                     url,

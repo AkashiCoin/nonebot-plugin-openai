@@ -1,0 +1,10 @@
+{
+    "tool_config": {
+        "func_google_search": {
+            "name": "\u8c37\u6b4c\u641c\u7d20",
+            "enable": true,
+            "api_key": "1",
+            "cx_key": ""
+        }
+    }
+}

@@ -190,7 +190,7 @@ async def send_msg(matcher, results):
             if result.content:
                 await matcher.send(result.content)
         elif isinstance(result, ToolCallResponse):
-            if result.content_type == "json":
+            if result.content_type == "str":
                 await matcher.send(result.content)
             elif result.content_type == "audio":
                 await matcher.send(MessageSegment.record(result.content))
