@@ -5,7 +5,7 @@ from . import ToolCallResponse, ToolCallConfig, tools_func
 
 
 class Config(ToolCallConfig):
-    name: str = "谷歌搜素"
+    name: str = "谷歌搜索"
     api_key: str = ""
     cx_key: str = ""
 
