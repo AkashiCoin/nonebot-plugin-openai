@@ -105,7 +105,7 @@ openai_parser.add_argument("--set-default", help="配置默认预设")
 openai_parser.add_argument("--reload", help="重载配置文件")
 openai_parser.add_argument("-v", "--view", help="查看状态")
 openai_parser.add_argument("-m", "--model", help="自定义模型", default=config.openai_default_model)
-openai = on_shell_command("openai", parser=openai_parser)
+openai = on_shell_command("openai", aliases=["op"], parser=openai_parser)
 
 
 @openai.handle()
