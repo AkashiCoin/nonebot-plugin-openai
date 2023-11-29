@@ -65,7 +65,7 @@ class Settings(BaseModel):
 
     def del_session(self, event: MessageEvent):
         _id = event.get_session_id()
-        if not self.sessions.get(_id):
+        if self.sessions.get(_id):
             del self.sessions[_id]
 
 
