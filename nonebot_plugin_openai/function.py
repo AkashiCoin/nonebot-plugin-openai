@@ -14,11 +14,12 @@ from openai.types.chat import (
     ChatCompletionContentPartTextParam,
     ChatCompletionFunctionMessageParam,
 )
-from pydantic import BaseModel, root_validator
+from pydantic import BaseModel, parse_file_as, root_validator
 
 from .utils import function_to_json_schema
 from .config import config
 from .types import Session, ToolCall, ToolCallConfig, ToolCallResponse
+
 
 class ToolsFunction(BaseModel):
     __tools = {}
@@ -41,8 +42,19 @@ class ToolsFunction(BaseModel):
             return json.loads(cls.__file_path.read_text("utf-8"))
         return values
 
-    def reload(self) -> None:
-        self.__init__()
+    def reload(self):
+        if self.file_path.is_file():
+            new_self = parse_file_as(self.__class__, self.file_path)
+            for key, value in new_self.dict().items():
+                self_value = getattr(self, key)
+                if isinstance(value, dict):
+                    self_value.clear()
+                    self_value.update(getattr(new_self, key))
+                elif isinstance(value, list):
+                    self_value.clear()
+                    self_value.extend(getattr(new_self, key))
+                else:
+                    setattr(self, key, getattr(new_self, key))
 
     @property
     def tools(self) -> Dict[str, ToolCall]:
@@ -64,7 +76,7 @@ class ToolsFunction(BaseModel):
             name=tool_info["function"]["name"],
             func=func,
             func_info=tool_info,
-            config=config
+            config=config,
         )
         logger.info(f"[Function] 注册 {config.name} 函数 {func_name} 成功.")
 

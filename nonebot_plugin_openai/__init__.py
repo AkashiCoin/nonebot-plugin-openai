@@ -154,7 +154,17 @@ async def handle_command(bot: Bot, event: MessageEvent, args: Namespace):
             else:
                 await openai.finish(f"预设 {args.set} 不存在.")
         if args.reload:
-            settings.reload()
+            if args.reload == "all":
+                settings.reload()
+                tools_func.reload()
+                await load_func()
+            elif args.reload == "func":
+                tools_func.reload()
+                await load_func()
+            elif args.reload == "config":
+                settings.reload()
+            else:
+                await openai.finish("参数错误。")
             await openai.finish("已重载配置文件。")
         if args.add or args.edit:
             args_parts = args.add if args.add else args.edit

@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from pydantic import BaseModel, root_validator
+from pydantic import BaseModel, parse_file_as, root_validator
 from nonebot.adapters.onebot.v11 import (
     MessageEvent,
     Message,
@@ -33,8 +33,19 @@ class Settings(BaseModel):
             return json.loads(cls.__file_path.read_text("utf-8"))
         return values
 
-    def reload(self) -> None:
-        self.__init__()
+    def reload(self):
+        if self.file_path.is_file():
+            new_self = parse_file_as(self.__class__, self.file_path)
+            for key, value in new_self.dict().items():
+                self_value = getattr(self, key)
+                if isinstance(value, dict):
+                    self_value.clear()
+                    self_value.update(getattr(new_self, key))
+                elif isinstance(value, list):
+                    self_value.clear()
+                    self_value.extend(getattr(new_self, key))
+                else:
+                    setattr(self, key, getattr(new_self, key))
 
     def save(self) -> None:
         if not self.file_path.is_file():

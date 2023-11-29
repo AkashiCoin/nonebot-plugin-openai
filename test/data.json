@@ -6,5 +6,12 @@
             "api_key": "1",
             "cx_key": ""
         }
-    }
+    },
+    "a_list": [
+        {
+            "name": "\u8c37\u6b4c\u641c\u7d20",
+            "enable": true
+        }
+    ],
+    "string": "test"
 }

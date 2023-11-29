@@ -57,7 +57,7 @@ def function_to_json_schema(function):
         # 准备用于存储当前参数信息的字典
         param_info = {
             "type": type_mapping.get(param.annotation, "string")
-            if param.annotation not in type_mapping
+            if param.annotation in type_mapping
             else "string",  # 参数类型
             "description": param_doc.description.replace("\n", " ") if param_doc else "",  # 参数描述
         }
