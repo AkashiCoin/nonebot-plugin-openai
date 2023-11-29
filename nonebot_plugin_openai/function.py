@@ -4,7 +4,7 @@ import os
 import shutil
 
 from pathlib import Path
-from typing import Dict, Callable, Union, Coroutine, Any
+from typing import Dict, Callable, Optional, Union, Coroutine, Any
 from loguru import logger
 from openai.types.chat import (
     ChatCompletionMessageToolCall,
@@ -68,6 +68,54 @@ class ToolsFunction(BaseModel):
             config=config,
         )
         logger.info(f"[Function] 注册 {config.name} 函数 {func_name} 成功.")
+
+    def tool_names(self):
+        return list(self.tools.keys()).extend(
+            [tool.config.name for tool in self.tools.values()]
+        )
+
+    def get_tool_from_name(self, name: str) -> Optional[ToolCall]:
+        if name in self.tools:
+            return self.tools[name]
+        for tool in self.tools.values():
+            if tool.config.name == name:
+                return tool
+        return None
+
+    def is_registered(self, func_name: str) -> bool:
+        return func_name in self.tool_names()
+
+    def disable(self, func_name: str) -> None:
+        tool = self.get_tool_from_name(func_name)
+        if tool:
+            tool.config.enable = False
+            self.save()
+
+    def enable(self, func_name: str) -> None:
+        tool = self.get_tool_from_name(func_name)
+        if tool:
+            tool.config.enable = True
+            self.save()
+
+    def is_enabled(self, func_name: str) -> bool:
+        tool = self.get_tool_from_name(func_name)
+        if tool:
+            return tool.config.enable
+        return False
+
+    def enabled_func_names(self):
+        return list(
+            f"{tool.config.name}({tool.name})"
+            for tool in self.tools.values()
+            if tool.config.enable
+        )
+
+    def disabled_func_names(self):
+        return list(
+            f"{tool.config.name}({tool.name})"
+            for tool in self.tools.values()
+            if not tool.config.enable
+        )
 
     def get(self, name) -> ToolCall:
         return self.tools.get(name)

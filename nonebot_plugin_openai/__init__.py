@@ -103,9 +103,10 @@ openai_parser.add_argument("-d", "--delete", help="删除预设")
 openai_parser.add_argument("-s", "--set", help="使用预设")
 openai_parser.add_argument("--set-default", help="配置默认预设")
 openai_parser.add_argument("--reload", help="重载配置文件")
+openai_parser.add_argument("--func", help="函数状态管理")
 openai_parser.add_argument("-v", "--view", help="查看状态")
 openai_parser.add_argument("-m", "--model", help="自定义模型", default=config.openai_default_model)
-openai = on_shell_command("openai", aliases=["op"], parser=openai_parser)
+openai = on_shell_command("openai", aliases=set(["op"]), parser=openai_parser)
 
 
 @openai.handle()
@@ -159,6 +160,39 @@ async def handle_command(bot: Bot, event: MessageEvent, args: Namespace):
                 await openai.finish(f"已配置默认预设 {preset.name}")
             else:
                 await openai.finish(f"预设 {args.set} 不存在.")
+        if args.func:
+            command = args.func
+            if args.text:
+                func_name = " ".join(args.text)
+                if not tools_func.is_registered(func_name):
+                    await openai.finish(f"函数 {func_name} 不存在。")
+                if "disable".startswith(command):
+                    tools_func.disable(func_name)
+                    await openai.finish(f"已禁用函数 {func_name}")
+                elif "enable".startswith(command):
+                    tools_func.enable(func_name)
+                    await openai.finish(f"已启用函数 {func_name}")
+                elif "view".startswith(command):
+                    if tools_func.is_enabled(func_name):
+                        await openai.finish(f"函数 {func_name} 已启用")
+                    else:
+                        await openai.finish(f"函数 {func_name} 已禁用")
+                else:
+                    await openai.finish("指令错误。")
+            else:
+                if "view".startswith(command):
+                    msg = ""
+                    enabled_names = tools_func.enabled_func_names()
+                    disabled_names = tools_func.disabled_func_names()
+                    if enabled_names:
+                        msg += "已启用的函数："
+                        msg += "".join([f'\n    {name}' for name in enabled_names])
+                    if disabled_names:
+                        msg += "\n已禁用的函数："
+                        msg += "".join([f'\n    {name}' for name in disabled_names])
+                    await openai.finish(msg if msg else "没有已启用或已禁用的函数。")
+                else:
+                    await openai.finish("指令错误。")
         if args.reload:
             if args.reload == "all":
                 settings.reload()
