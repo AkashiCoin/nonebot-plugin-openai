@@ -12,6 +12,7 @@ from typing import Any, List, Literal, Optional, Union, Dict
 
 from .types import Channel, Session, Preset
 from .config import config
+from .utils import reload
 
 
 class Settings(BaseModel):
@@ -34,18 +35,7 @@ class Settings(BaseModel):
         return values
 
     def reload(self):
-        if self.file_path.is_file():
-            new_self = parse_file_as(self.__class__, self.file_path)
-            for key, value in new_self.dict().items():
-                self_value = getattr(self, key)
-                if isinstance(value, dict):
-                    self_value.clear()
-                    self_value.update(getattr(new_self, key))
-                elif isinstance(value, list):
-                    self_value.clear()
-                    self_value.extend(getattr(new_self, key))
-                else:
-                    setattr(self, key, getattr(new_self, key))
+        reload(self)
 
     def save(self) -> None:
         if not self.file_path.is_file():

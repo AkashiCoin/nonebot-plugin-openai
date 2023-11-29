@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import time
 
 from argparse import Namespace
@@ -62,6 +63,7 @@ driver = get_driver()
 
 @driver.on_startup
 async def load_func():
+    from importlib import reload
     tools_func.register(openai_client.tts, ToolCallConfig(name="TTS"))
     tools_func.register(openai_client.gen_image, ToolCallConfig(name="DALL-E"))
     # 从config.openai_data_path配置的文件夹中的func文件夹中读取出所有开头为func的文件名
@@ -85,7 +87,11 @@ async def load_func():
     # 从当前文件夹cache_func文件夹中
     for func_file in func_files:
         module_name, _ = os.path.splitext(func_file)  # remove .py extension
-        importlib.import_module(f'.cache_func.{module_name}', package=__package__)
+        module = f'{__package__}.cache_func.{module_name}'
+        if sys.modules.get(module):
+            reload(sys.modules[module])
+        else:
+            importlib.import_module(module)
     tools_func.save()
 
 openai_parser = ArgumentParser(description="Openai指令")

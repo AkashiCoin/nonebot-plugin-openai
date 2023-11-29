@@ -3,6 +3,7 @@ import json
 from typing import List, get_type_hints, Literal, get_args
 from nonebot.adapters.onebot.v11 import MessageEvent, Message, MessageSegment
 from docstring_parser import parse
+from pydantic import BaseModel, parse_file_as
 
 
 def function_to_json_schema(function):
@@ -142,6 +143,21 @@ def get_message_img(event: MessageEvent) -> str:
     if imgs:
         return imgs[0]
     return ""
+
+
+def reload(model: BaseModel):
+    if model.file_path.is_file():
+        new_self = parse_file_as(model.__class__, model.file_path)
+        for key in new_self.dict().keys():
+            self_value = getattr(model, key)
+            if isinstance(self_value, dict):
+                self_value.clear()
+                self_value.update(getattr(new_self, key))
+            elif isinstance(self_value, list):
+                self_value.clear()
+                self_value.extend(getattr(new_self, key))
+            else:
+                setattr(model, key, getattr(new_self, key))
 
 
 def test():

@@ -16,7 +16,7 @@ from openai.types.chat import (
 )
 from pydantic import BaseModel, parse_file_as, root_validator
 
-from .utils import function_to_json_schema
+from .utils import function_to_json_schema, reload
 from .config import config
 from .types import Session, ToolCall, ToolCallConfig, ToolCallResponse
 
@@ -43,18 +43,7 @@ class ToolsFunction(BaseModel):
         return values
 
     def reload(self):
-        if self.file_path.is_file():
-            new_self = parse_file_as(self.__class__, self.file_path)
-            for key, value in new_self.dict().items():
-                self_value = getattr(self, key)
-                if isinstance(value, dict):
-                    self_value.clear()
-                    self_value.update(getattr(new_self, key))
-                elif isinstance(value, list):
-                    self_value.clear()
-                    self_value.extend(getattr(new_self, key))
-                else:
-                    setattr(self, key, getattr(new_self, key))
+        reload(self)
 
     @property
     def tools(self) -> Dict[str, ToolCall]:
