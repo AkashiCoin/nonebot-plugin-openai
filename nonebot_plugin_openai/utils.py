@@ -47,7 +47,8 @@ def function_to_json_schema(function):
     for param_name, param in parameters.items():
         if param_name == "self":  # 忽略self参数
             continue
-
+        if param_name == "config":  # 忽略config参数
+            continue
         # 查找参数的文档字符串
         param_doc = next(
             (arg for arg in docstring.params if arg.arg_name == param_name), None

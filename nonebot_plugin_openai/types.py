@@ -1,4 +1,5 @@
 from io import BytesIO
+from pathlib import Path
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionMessageToolCall,
@@ -17,15 +18,15 @@ class Channel(BaseModel):
 
 class ToolCallResponse:
     name: str
-    content_type: Literal["json", "image", "audio"]
-    content: Optional[Union[Any, str, dict, Image, bytes]]
-    data: str
+    content_type: Literal["str", "openai_image", "image", "audio"]  # 发送给用户内容的格式
+    content: Optional[Union[Any, str, Image, bytes, Path]]  # 用于发送给用户的内容
+    data: str  # 用于回复给openai的内容
 
     def __init__(
         self,
         name: str,
-        content_type: Literal["json", "image", "audio"],
-        content: Optional[Union[Any, str, dict, Image, bytes]],
+        content_type: Literal["str", "openai_image", "image", "audio"],
+        content: Optional[Union[Any, str, Image, bytes, Path]],
         data: str,
     ):
         self.name = name
@@ -34,33 +35,44 @@ class ToolCallResponse:
         self.data = data
 
 
+class ToolCallConfig(BaseModel):
+    name: str
+    enable: bool = True
+
+
 class ToolCall:
     name: str
     func: Callable[..., Coroutine[Any, Any, ToolCallResponse]]
     func_info: dict
+    config: ToolCallConfig
 
     def __init__(
         self,
-        name: str,
-        func: Callable[..., Coroutine[Any, Any, ToolCallResponse]],
-        func_info: dict,
+        name: str = "",
+        func: Callable[..., Coroutine[Any, Any, ToolCallResponse]] = None,
+        func_info: dict = None,
+        config: ToolCallConfig = ToolCallConfig(name="Unknown"),
     ):
         self.name = name
         self.func = func
         self.func_info = func_info
+        self.config = config
 
 
 class ToolCallRequest:
     tool_call: ChatCompletionMessageToolCall
     func: Callable[..., Coroutine[Any, Any, ToolCallResponse]]
+    config: ToolCallConfig
 
     def __init__(
         self,
         tool_call: ChatCompletionMessageToolCall,
         func: Callable[..., Coroutine[Any, Any, ToolCallResponse]],
+        config: ToolCallConfig,
     ):
         self.tool_call = tool_call
         self.func = func
+        self.config = config
 
 
 class Preset(BaseModel):
@@ -80,9 +92,7 @@ class Session(BaseModel):
             preset = self.preset
         _preset = []
         if preset:
-            _preset =  [
-                ChatCompletionSystemMessageParam(
-                    content=preset.prompt, role="system"
-                )
+            _preset = [
+                ChatCompletionSystemMessageParam(content=preset.prompt, role="system")
             ]
-        return _preset + self.messages[-self.max_length:]
+        return _preset + self.messages[-self.max_length :]

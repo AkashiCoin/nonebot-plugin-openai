@@ -17,7 +17,14 @@ from httpx import AsyncClient
 from pydantic import BaseModel
 from loguru import logger
 
-from .types import Channel, Session, ToolCall, ToolCallResponse, ToolCallRequest
+from .types import (
+    Channel,
+    Session,
+    ToolCall,
+    ToolCallConfig,
+    ToolCallResponse,
+    ToolCallRequest,
+)
 from .function import ToolsFunction
 
 
@@ -76,85 +83,101 @@ class OpenAIClient:
         return results
 
     async def chat_completions(
-            self,
-            session: Session,
-            model="gpt-3.5-turbo",
-            tool_choice: Literal["none", "auto"] = "auto",
-        ):
-            """
-            该函数用于生成聊天的完成内容。
+        self,
+        session: Session,
+        model="gpt-3.5-turbo",
+        tool_choice: Literal["none", "auto"] = "auto",
+    ):
+        """
+        该函数用于生成聊天的完成内容。
 
-            参数:
-            session (Session): 当前的会话对象。
-            model (str, 可选): 使用的模型名称，默认为"gpt-3.5-turbo"。
-            tool_choice (Literal["none", "auto"], 可选): 工具选择，默认为"auto"。
+        参数:
+        session (Session): 当前的会话对象。
+        model (str, 可选): 使用的模型名称，默认为"gpt-3.5-turbo"。
+        tool_choice (Literal["none", "auto"], 可选): 工具选择，默认为"auto"。
 
-            返回:
-            results (list): 包含完成内容的列表。
+        返回:
+        results (list): 包含完成内容的列表。
 
-            """
-            # 检查模型名称中是否包含"vision"
-            vision = model.count("vision") > 0
-            messages = session.get_messages()
-            if vision:
-                messages = [messages[-1]]
-                session.messages.pop()
+        """
+        # 检查模型名称中是否包含"vision"
+        vision = model.count("vision") > 0
+        messages = session.get_messages()
+        if vision:
+            messages = [messages[-1]]
+            session.messages.pop()
 
-            # 创建聊天完成内容
-            chat_completion = await self.client.chat.completions.create(
-                messages=messages,
-                model=model,
-                tool_choice=None if vision else tool_choice,
-                tools=None if vision else self.tool_func.tools_info(),
-                user=session.user,
-                max_tokens=1024 if vision else None,
-            )
+        # 创建聊天完成内容
+        chat_completion = await self.client.chat.completions.create(
+            messages=messages,
+            model=model,
+            tool_choice=None if vision else tool_choice,
+            tools=None if vision else self.tool_func.tools_info(),
+            user=session.user,
+            max_tokens=1024 if vision else None,
+        )
 
-            # 记录聊天完成内容
-            logger.info(f"chat_comletion: {chat_completion}")
+        # 记录聊天完成内容
+        logger.info(f"chat_comletion: {chat_completion}")
 
-            # 获取完成内容的选择
-            choices = chat_completion.choices
+        # 获取完成内容的选择
+        choices = chat_completion.choices
 
-            # 初始化结果列表
-            results = []
+        # 初始化结果列表
+        results = []
 
-            # 遍历每个选择
-            for choice in choices:
-                # 将选择的消息添加到结果列表中
-                results.append(choice.message)
+        # 遍历每个选择
+        for choice in choices:
+            if choice.message.role == "":
+                choice.message.role = "assistant"
+            # 将选择的消息添加到结果列表中
+            results.append(choice.message)
 
-                # 如果消息中包含工具调用
-                if choice.message.tool_calls:
-                    # 清空消息内容，防止OpenAI奇怪的报错
-                    choice.message.content = ""
+            # 如果消息中包含工具调用
+            if choice.message.tool_calls:
+                # 清空消息内容，防止OpenAI奇怪的报错
+                choice.message.content = ""
 
-                    # 遍历每个工具调用
-                    for tool_call in choice.message.tool_calls:
-                        # 调用工具
-                        task = self.tool_func.call_tool(tool_call=tool_call, session=session)
-
-                        # 将工具调用请求添加到结果列表中
-                        results.append(ToolCallRequest(tool_call=tool_call, func=task))
-
-                # 如果消息中包含函数调用
-                if choice.message.function_call:
-                    # 清空消息内容，防止OpenAI奇怪的报错
-                    choice.message.content = ""
-
-                    # 调用函数
-                    task = self.tool_func.call_function(
-                        function_call=choice.message.function_call, session=session
+                # 遍历每个工具调用
+                for tool_call in choice.message.tool_calls:
+                    # 调用工具
+                    task = self.tool_func.call_tool(
+                        tool_call=tool_call, session=session
                     )
 
-                    # 将函数调用请求添加到结果列表中
-                    results.append(ToolCallRequest(tool_call=choice.message.function_call, func=task))
+                    # 将工具调用请求添加到结果列表中
+                    results.append(
+                        ToolCallRequest(
+                            tool_call=tool_call,
+                            func=task,
+                            config=self.tool_func.tool_config[tool_call.function.name],
+                        )
+                    )
 
-                # 将选择的消息添加到会话的消息列表中
-                session.messages.append(choice.message)
+            # 如果消息中包含函数调用
+            if choice.message.function_call:
+                # 清空消息内容，防止OpenAI奇怪的报错
+                choice.message.content = ""
 
-            # 返回结果列表
-            return results
+                # 调用函数
+                task = self.tool_func.call_function(
+                    function_call=choice.message.function_call, session=session
+                )
+
+                # 将函数调用请求添加到结果列表中
+                results.append(
+                    ToolCallRequest(
+                        tool_call=choice.message.function_call,
+                        func=task,
+                        config=self.tool_func.tool_config[tool_call.function.name],
+                    )
+                )
+
+            # 将选择的消息添加到会话的消息列表中
+            session.messages.append(choice.message)
+
+        # 返回结果列表
+        return results
 
     async def tts(
         self,
@@ -162,6 +185,7 @@ class OpenAIClient:
         model: Literal["tts-1", "tts-1-hd"] = "tts-1",
         voice: Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"] = "shimmer",
         speed: float = 1.0,
+        config: ToolCallConfig = None,
     ):
         """
         Generates audio from the input text. Can produce a method of speaking to be used in a
@@ -202,6 +226,7 @@ class OpenAIClient:
             "256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"
         ] = "1024x1024",
         style: Literal["vivid", "natural"] = "vivid",
+        config: ToolCallConfig = None,
     ):
         """
         Creates an image given a prompt.
@@ -237,7 +262,7 @@ class OpenAIClient:
         )
         resp = ToolCallResponse(
             name="gen_image",
-            content_type="image",
+            content_type="openai_image",
             content=None,
             data="failed to generate image",
         )

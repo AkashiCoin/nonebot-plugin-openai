@@ -45,17 +45,17 @@ class Settings(BaseModel):
         self.presets[name] = Preset(name=name, prompt=prompt)
 
     def get_preset(self, name: str):
-        if name in self.presets:
+        if self.presets.get(name):
             return self.presets[name]
         return None
 
     def del_preset(self, name: str):
-        if name in self.presets:
+        if self.presets.get(name):
             del self.presets[name]
 
     def get_session(self, event: MessageEvent, preset: Optional[Preset] = None) -> Session:
         _id = event.get_session_id()
-        if _id not in self.sessions:
+        if not self.sessions.get(_id):
             session = Session(id=_id)
             self.sessions[_id] = session
             session.preset = self.default_preset
@@ -64,7 +64,7 @@ class Settings(BaseModel):
 
     def del_session(self, event: MessageEvent):
         _id = event.get_session_id()
-        if _id in self.sessions:
+        if not self.sessions.get(_id):
             del self.sessions[_id]
 
 

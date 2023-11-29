@@ -1,5 +1,11 @@
+import importlib
 import json
+import os
+import shutil
+
+from pathlib import Path
 from typing import Dict, Callable, Union, Coroutine, Any
+from loguru import logger
 from openai.types.chat import (
     ChatCompletionMessageToolCall,
     ChatCompletionToolMessageParam,
@@ -8,29 +14,59 @@ from openai.types.chat import (
     ChatCompletionContentPartTextParam,
     ChatCompletionFunctionMessageParam,
 )
+from pydantic import BaseModel, root_validator
 
 from .utils import function_to_json_schema
-from .types import Session, ToolCall, ToolCallResponse
+from .config import config
+from .types import Session, ToolCall, ToolCallConfig, ToolCallResponse
 
+class ToolsFunction(BaseModel):
+    __tools = {}
+    tool_config: Dict[str, Union[Dict, ToolCallConfig]] = {}
 
-class ToolsFunction:
-    tools: Dict[str, ToolCall]
+    __file_path = Path(os.path.join(config.openai_data_path, "tool_config.json"))
 
-    def __init__(self):
-        self.tools = {}
+    @property
+    def file_path(self) -> Path:
+        return self.__class__.__file_path
+
+    def save(self) -> None:
+        if not self.file_path.is_file():
+            os.makedirs(self.file_path.parent, exist_ok=True)
+        self.file_path.write_text(self.json(indent=4), encoding="utf-8")
+
+    @root_validator(pre=True)
+    def init(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        if cls.__file_path.is_file():
+            return json.loads(cls.__file_path.read_text("utf-8"))
+        return values
+
+    def reload(self) -> None:
+        self.__init__()
+
+    @property
+    def tools(self) -> Dict[str, ToolCall]:
+        return self.__tools
 
     def register(
         self,
         func: Callable[
             ..., Union[ToolCallResponse, Coroutine[Any, Any, ToolCallResponse]]
         ],
+        config: ToolCallConfig = ToolCallConfig(name="Unknown"),
     ):
         tool_info = function_to_json_schema(func)
-        self.tools[tool_info["function"]["name"]] = ToolCall(
+        func_name = tool_info["function"]["name"]
+        if func_name in self.tool_config:
+            config = config.parse_obj(self.tool_config[func_name])
+        self.tool_config[tool_info["function"]["name"]] = config
+        self.tools[func_name] = ToolCall(
             name=tool_info["function"]["name"],
             func=func,
             func_info=tool_info,
+            config=config
         )
+        logger.info(f"[Function] 注册 {config.name} 函数 {func_name} 成功.")
 
     def get(self, name) -> ToolCall:
         return self.tools.get(name)
@@ -39,7 +75,9 @@ class ToolsFunction:
         return self.get(name)
 
     def tools_info(self):
-        return list(tool_call.func_info for tool_call in self.tools.values())
+        return list(
+            tool.func_info for tool in self.tools.values() if tool.config.enable
+        )
 
     async def call_function(
         self, function_call: ChatCompletionFunctionMessageParam, session: Session
@@ -57,7 +95,7 @@ class ToolsFunction:
             return result
         return ToolCallResponse(
             name=function_call.name,
-            content_type="json",
+            content_type="str",
             content=None,
             data=f"failed, tool({function_call.name}) not found",
         )
@@ -68,7 +106,7 @@ class ToolsFunction:
         tool = self.tools.get(tool_call.function.name)
         if tool:
             kwargs = json.loads(tool_call.function.arguments)
-            result = await tool.func(**kwargs)
+            result = await tool.func(**kwargs, config=self.tool_config[tool.name])
             session.messages.append(
                 ChatCompletionToolMessageParam(
                     tool_call_id=tool_call.id,
@@ -80,7 +118,7 @@ class ToolsFunction:
             return result
         return ToolCallResponse(
             name=tool_call.function.name,
-            content_type="json",
+            content_type="str",
             content=None,
             data=f"failed, tool({tool_call.function.name}) not found",
         )
