@@ -80,7 +80,7 @@ async def load_func():
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
     with open(os.path.join(cache_dir, "__init__.py"), "w") as f:
-        f.write("from ..types import ToolCallResponse, ToolCallConfig\nfrom ..function import tools_func")
+        f.write("from ..types import ToolCallResponse, ToolCallConfig, FuncContext\nfrom ..function import tools_func")
     for func_file in func_files:
         shutil.copy(os.path.join(func_dir, func_file), cache_dir)
 

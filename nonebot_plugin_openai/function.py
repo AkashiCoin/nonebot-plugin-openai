@@ -18,7 +18,7 @@ from pydantic import BaseModel, parse_file_as, root_validator
 
 from .utils import function_to_json_schema, reload
 from .config import config
-from .types import Session, ToolCall, ToolCallConfig, ToolCallResponse
+from .types import Session, ToolCall, ToolCallConfig, ToolCallResponse, FuncContext
 
 
 class ToolsFunction(BaseModel):
@@ -81,11 +81,16 @@ class ToolsFunction(BaseModel):
         )
 
     async def call_function(
-        self, function_call: ChatCompletionFunctionMessageParam, session: Session
+        self,
+        function_call: ChatCompletionFunctionMessageParam,
+        session: Session,
+        ctx: FuncContext[ToolCallConfig],
     ):
         tool = self.tools.get(function_call.name)
         if tool:
-            result = await tool.func(**json.loads(function_call.arguments))
+            kwargs = json.loads(function_call.arguments)
+            kwargs["ctx"] = ctx
+            result = await tool.func(**kwargs)
             session.messages.append(
                 ChatCompletionFunctionMessageParam(
                     role="function",
@@ -102,12 +107,16 @@ class ToolsFunction(BaseModel):
         )
 
     async def call_tool(
-        self, tool_call: ChatCompletionMessageToolCall, session: Session
+        self,
+        tool_call: ChatCompletionMessageToolCall,
+        session: Session,
+        ctx: FuncContext[ToolCallConfig],
     ):
         tool = self.tools.get(tool_call.function.name)
         if tool:
             kwargs = json.loads(tool_call.function.arguments)
-            result = await tool.func(**kwargs, config=self.tool_config[tool.name])
+            kwargs["ctx"] = ctx
+            result = await tool.func(**kwargs)
             session.messages.append(
                 ChatCompletionToolMessageParam(
                     tool_call_id=tool_call.id,

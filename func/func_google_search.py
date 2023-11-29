@@ -1,7 +1,7 @@
 from weakref import proxy
 from httpx import AsyncClient
 from loguru import logger
-from . import ToolCallResponse, ToolCallConfig, tools_func
+from . import ToolCallResponse, ToolCallConfig, tools_func, FuncContext
 
 
 class Config(ToolCallConfig):
@@ -10,7 +10,9 @@ class Config(ToolCallConfig):
     cx_key: str = ""
 
 
-async def func_google_search(config: Config, keyword: str, max_results: int = 3):
+async def func_google_search(
+    ctx: FuncContext[Config], keyword: str, max_results: int = 3
+):
     """
     This function performs a Google search using the Google Custom Search JSON API.
 
@@ -29,22 +31,22 @@ async def func_google_search(config: Config, keyword: str, max_results: int = 3)
     }
 
     url = "https://www.googleapis.com/customsearch/v1"
+    config = ctx.config
     try:
-        async with AsyncClient() as cli:
-            response = (
-                await cli.get(
-                    url,
-                    headers=headers,
-                    params={"key": config.api_key, "cx": config.cx_key, "q": keyword},
-                )
-            ).json()
+        response = (
+            await ctx.http_client.get(
+                url,
+                headers=headers,
+                params={"key": config.api_key, "cx": config.cx_key, "q": keyword},
+            )
+        ).json()
     except:
         logger.exception("搜索失败")
         return ToolCallResponse(
             name=config.name,
             content_type="str",
             content="搜素失败，检查函数配置",
-            data="search error"
+            data="search error",
         )
     try:
         items = response["items"]
@@ -59,7 +61,7 @@ async def func_google_search(config: Config, keyword: str, max_results: int = 3)
             name=config.name,
             content_type="str",
             content="搜索失败，无法找到相关结果",
-            data=f"search error, can not found {keyword}"
+            data=f"search error, can not found {keyword}",
         )
 
     return ToolCallResponse(
@@ -68,5 +70,6 @@ async def func_google_search(config: Config, keyword: str, max_results: int = 3)
         content=text,
         data=text,
     )
+
 
 tools_func.register(func_google_search, Config())

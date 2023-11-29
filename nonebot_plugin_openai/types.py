@@ -1,12 +1,14 @@
 from io import BytesIO
 from pathlib import Path
+import httpx
+from openai import AsyncOpenAI
 from openai.types.chat import (
     ChatCompletionMessageParam,
     ChatCompletionMessageToolCall,
     ChatCompletionSystemMessageParam,
 )
 from openai.types.image import Image
-from typing import Any, Callable, Coroutine, List, Literal, Optional, Union
+from typing import Any, Callable, Coroutine, Generic, List, Literal, Optional, TypeVar, Union
 from pydantic import BaseModel
 
 
@@ -96,3 +98,25 @@ class Session(BaseModel):
                 ChatCompletionSystemMessageParam(content=preset.prompt, role="system")
             ]
         return _preset + self.messages[-self.max_length :]
+
+
+T = TypeVar('T', bound=ToolCallConfig)
+
+
+class FuncContext(Generic[T]):
+    session: Session
+    http_client: httpx.AsyncClient
+    openai_client: AsyncOpenAI
+    config: T
+
+    def __init__(
+        self,
+        session: Session,
+        http_client: httpx.AsyncClient,
+        openai_client: AsyncOpenAI,
+        config: T,
+    ):
+        self.session = session
+        self.http_client = http_client
+        self.openai_client = openai_client
+        self.config = config

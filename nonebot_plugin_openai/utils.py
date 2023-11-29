@@ -46,9 +46,7 @@ def function_to_json_schema(function):
 
     # 遍历每个参数
     for param_name, param in parameters.items():
-        if param_name == "self":  # 忽略self参数
-            continue
-        if param_name == "config":  # 忽略config参数
+        if param_name in ["self", "config", "ctx"]:  # 忽略参数
             continue
         # 查找参数的文档字符串
         param_doc = next(
@@ -57,10 +55,10 @@ def function_to_json_schema(function):
 
         # 准备用于存储当前参数信息的字典
         param_info = {
-            "type": type_mapping.get(param.annotation, "string")
-            if param.annotation in type_mapping
-            else "string",  # 参数类型
-            "description": param_doc.description.replace("\n", " ") if param_doc else "",  # 参数描述
+            "type": type_mapping.get(param.annotation, "string"),
+            "description": param_doc.description.replace("\n", " ")
+            if param_doc
+            else "",  # 参数描述
         }
 
         # 如果参数有默认值，添加默认值信息
@@ -73,6 +71,7 @@ def function_to_json_schema(function):
             and param.annotation.__origin__ is Literal
         ):
             param_info["enum"] = list(get_args(param.annotation))
+            param_info["type"] = type_mapping.get(type(param_info["enum"][0]), "string")
 
         # 将参数信息添加到参数信息字典中
         param_properties[param_name] = param_info

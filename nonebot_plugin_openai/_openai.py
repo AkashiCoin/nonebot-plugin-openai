@@ -24,6 +24,7 @@ from .types import (
     ToolCallConfig,
     ToolCallResponse,
     ToolCallRequest,
+    FuncContext,
 )
 from .function import ToolsFunction
 
@@ -140,9 +141,17 @@ class OpenAIClient:
 
                 # 遍历每个工具调用
                 for tool_call in choice.message.tool_calls:
+                    config = self.tool_func.tool_config[tool_call.function.name]
                     # 调用工具
                     task = self.tool_func.call_tool(
-                        tool_call=tool_call, session=session
+                        tool_call=tool_call,
+                        session=session,
+                        ctx=FuncContext[type[config]](
+                            session=session,
+                            openai_client=self.client,
+                            http_client=self.http_client,
+                            config=config,
+                        ),
                     )
 
                     # 将工具调用请求添加到结果列表中
@@ -150,7 +159,7 @@ class OpenAIClient:
                         ToolCallRequest(
                             tool_call=tool_call,
                             func=task,
-                            config=self.tool_func.tool_config[tool_call.function.name],
+                            config=config,
                         )
                     )
 
@@ -161,7 +170,8 @@ class OpenAIClient:
 
                 # 调用函数
                 task = self.tool_func.call_function(
-                    function_call=choice.message.function_call, session=session
+                    function_call=choice.message.function_call,
+                    session=session,
                 )
 
                 # 将函数调用请求添加到结果列表中
@@ -185,7 +195,7 @@ class OpenAIClient:
         model: Literal["tts-1", "tts-1-hd"] = "tts-1",
         voice: Literal["alloy", "echo", "fable", "onyx", "nova", "shimmer"] = "shimmer",
         speed: float = 1.0,
-        config: ToolCallConfig = None,
+        ctx: FuncContext[ToolCallConfig] = None,
     ):
         """
         Generates audio from the input text. Can produce a method of speaking to be used in a
@@ -226,7 +236,7 @@ class OpenAIClient:
             "256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"
         ] = "1024x1024",
         style: Literal["vivid", "natural"] = "vivid",
-        config: ToolCallConfig = None,
+        ctx: FuncContext[ToolCallConfig] = None,
     ):
         """
         Creates an image given a prompt.
