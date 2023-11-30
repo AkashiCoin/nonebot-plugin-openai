@@ -40,7 +40,7 @@ class Settings(BaseModel):
     def save(self) -> None:
         if not self.file_path.is_file():
             os.makedirs(self.file_path.parent, exist_ok=True)
-        self.file_path.write_text(self.json(indent=4), encoding="utf-8")
+        self.file_path.write_text(self.json(indent=4, exclude_none=True), encoding="utf-8")
 
     def add_preset(self, name: str, prompt: str):
         self.presets[name] = Preset(name=name, prompt=prompt)

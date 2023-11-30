@@ -28,12 +28,12 @@ from nonebot.permission import SUPERUSER
 from nonebot.typing import T_State
 
 from openai.types.chat import ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
+from openai.types.chat.chat_completion import Choice, CompletionUsage
 
 from .utils import get_message_img
 from ._openai import OpenAIClient
 from .config import config, Config
-from .types import Channel, ToolCallConfig, ToolCallResponse, ToolCallRequest
+from .types import Channel, Session, ToolCallConfig, ToolCallResponse, ToolCallRequest
 from .settings import settings
 from .function import tools_func
 
@@ -64,32 +64,35 @@ driver = get_driver()
 @driver.on_startup
 async def load_func():
     from importlib import reload
+
     for session in settings.sessions.values():
         session.running = False
     tools_func.register(openai_client.tts, ToolCallConfig(name="TTS"))
     tools_func.register(openai_client.gen_image, ToolCallConfig(name="DALL-E"))
+    tools_func.register(openai_client.vision, ToolCallConfig(name="Vision"))
     # 从config.openai_data_path配置的文件夹中的func文件夹中读取出所有开头为func的文件名
-    func_dir = os.path.join(config.openai_data_path, 'func')
+    func_dir = os.path.join(config.openai_data_path, "func")
     if not os.path.exists(func_dir):
         os.makedirs(func_dir)
     func_files = [
-        f for f in os.listdir(func_dir) 
-        if f.startswith('func') and f.endswith('.py')
+        f for f in os.listdir(func_dir) if f.startswith("func") and f.endswith(".py")
     ]
 
     # 将func文件夹中的所有文件复制进入cache_func目录
-    cache_dir = os.path.join(Path(__file__).parent, 'cache_func')
+    cache_dir = os.path.join(Path(__file__).parent, "cache_func")
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
     with open(os.path.join(cache_dir, "__init__.py"), "w") as f:
-        f.write("from ..types import ToolCallResponse, ToolCallConfig, FuncContext\nfrom ..function import tools_func")
+        f.write(
+            "from ..types import ToolCallResponse, ToolCallConfig, FuncContext\nfrom ..function import tools_func"
+        )
     for func_file in func_files:
         shutil.copy(os.path.join(func_dir, func_file), cache_dir)
 
     # 从当前文件夹cache_func文件夹中
     for func_file in func_files:
         module_name, _ = os.path.splitext(func_file)  # remove .py extension
-        module = f'{__package__}.cache_func.{module_name}'
+        module = f"{__package__}.cache_func.{module_name}"
         if sys.modules.get(module):
             reload(sys.modules[module])
         else:
@@ -104,9 +107,7 @@ def single_run_locker() -> Any:
     ) -> AsyncGenerator[None, None]:
         session = settings.get_session(event)
         if session.running:
-            await matcher.finish(
-                "我知道你很急，但你先别急", reply_message=True
-            )
+            await matcher.finish("我知道你很急，但你先别急", reply_message=True)
         yield
 
     return Depends(check_running)
@@ -123,7 +124,9 @@ openai_parser.add_argument("--set-default", help="配置默认预设")
 openai_parser.add_argument("--reload", help="重载配置文件")
 openai_parser.add_argument("--func", help="函数状态管理")
 openai_parser.add_argument("-v", "--view", help="查看状态")
-openai_parser.add_argument("-m", "--model", help="自定义模型", default=config.openai_default_model)
+openai_parser.add_argument(
+    "-m", "--model", help="自定义模型", default=config.openai_default_model
+)
 openai = on_shell_command("openai", aliases=set(["op"]), parser=openai_parser)
 
 
@@ -136,31 +139,50 @@ async def _(bot: Bot, event: MessageEvent, args: Namespace = ShellCommandArgs())
         if isinstance(arg, str):
             text += arg + " "
     img_url = get_message_img(event)
-    results = []
+    await handle_chat(openai, session, text=text, model=args.model, image_url=img_url)
+
+
+async def handle_chat(
+    matcher: Matcher,
+    session: Session,
+    text: str = "",
+    model: str = "",
+    image_url: str = "",
+    results: List[Union[ChatCompletionMessage, ToolCallResponse, Exception]] = [],
+):
     try:
         session.running = True
-        results = await openai_client.chat(session, prompt=text, model=args.model, image_url=img_url)
+        if not results:
+            results = await openai_client.chat(
+                session, prompt=text, model=model, image_url=image_url
+            )
         tasks = []
         for result in results:
             if isinstance(result, ToolCallRequest):
-                await openai.send(f"[Function] 开始调用 {result.config.name} ...")
+                await matcher.send(f"[Function] 开始调用 {result.config.name} ...")
                 tasks.append(result.func)
         results.extend(await asyncio.gather(*tasks, return_exceptions=True))
-        asyncio.ensure_future(send_msg(openai, results))
-        # if tasks:
-        #     results = await openai_client.chat(session=session, tool_choice="none")
-        #     await send_msg(openai, results)
-        settings.save()
+        asyncio.ensure_future(send_msg(matcher, results))
+        for result in results:
+            if isinstance(result, ToolCallResponse) and result.data:
+                results = await openai_client.chat(session=session, model=model)
+                await send_msg(matcher, results)
+                break
+        else:
+            results = []
+        if results:
+            await handle_chat(matcher, session, model=model, results=results)
     except Exception as e:
         logger.opt(exception=e).error(e)
         await openai.send(f"发生了一些错误: {e}")
     finally:
         session.running = False
+        settings.save()
 
 
 async def handle_command(bot: Bot, event: MessageEvent, args: Namespace):
     if args.clear:
-        settings.del_session(event)
+        settings.clear_messages(event)
         settings.save()
         if not args.text:
             await openai.finish("已清空上下文。")
@@ -207,10 +229,10 @@ async def handle_command(bot: Bot, event: MessageEvent, args: Namespace):
                     disabled_names = tools_func.disabled_func_names()
                     if enabled_names:
                         msg += "已启用的函数："
-                        msg += "".join([f'\n    {name}' for name in enabled_names])
+                        msg += "".join([f"\n    {name}" for name in enabled_names])
                     if disabled_names:
                         msg += "\n已禁用的函数："
-                        msg += "".join([f'\n    {name}' for name in disabled_names])
+                        msg += "".join([f"\n    {name}" for name in disabled_names])
                     await openai.finish(msg if msg else "没有已启用或已禁用的函数。")
                 else:
                     await openai.finish("指令错误。")
@@ -257,22 +279,35 @@ async def handle_command(bot: Bot, event: MessageEvent, args: Namespace):
                 await openai.finish("参数错误。")
 
 
-async def send_msg(matcher: Matcher, results: List[Union[ChatCompletionMessage, ToolCallResponse, Exception]]):
+async def send_msg(
+    matcher: Matcher,
+    results: List[Union[ChatCompletionMessage, ToolCallResponse, Exception]],
+):
     for result in results:
+        results.remove(result)
         if isinstance(result, ChatCompletionMessage):
             if result.content:
                 await matcher.send(result.content)
         elif isinstance(result, ToolCallResponse):
-            if result.content_type == "str":
-                await matcher.send(result.content)
-            elif result.content_type == "audio":
-                await matcher.send(MessageSegment.record(result.content))
-            elif result.content_type == "openai_image":
-                await matcher.send(MessageSegment.image(result.content.url) + "\n" + result.content.revised_prompt)
-            elif result.content_type == "image":
-                await matcher.send(MessageSegment.image(result.content))
+            if result.content:
+                if result.content_type == "str":
+                    await matcher.send(result.content)
+                elif result.content_type == "audio":
+                    await matcher.send(MessageSegment.record(result.content))
+                elif result.content_type == "openai_image":
+                    await matcher.send(
+                        MessageSegment.image(result.content.url)
+                        + "\n"
+                        + result.content.revised_prompt
+                    )
+                elif result.content_type == "image":
+                    await matcher.send(MessageSegment.image(result.content))
         elif isinstance(result, Exception):
             await matcher.send(f"发生了一些错误：{result}")
+        elif isinstance(result, CompletionUsage):
+            logger.info(f"花费: {result}")
+        else:
+            results.append(result)
 
 
 message = on_message(priority=5, block=True)
@@ -295,26 +330,7 @@ async def _(event: MessageEvent, state: T_State):
     session = settings.get_session(event)
     text = state["text"]
     img_url = get_message_img(event)
-    results = []
-    try:
-        session.running = True
-        results = await openai_client.chat(session, prompt=text, image_url=img_url)
-        tasks = []
-        for result in results:
-            if isinstance(result, ToolCallRequest):
-                await message.send(f"[Function] 开始调用 {result.config.name} ...")
-                tasks.append(result.func)
-        results.extend(await asyncio.gather(*tasks, return_exceptions=True))
-        asyncio.ensure_future(send_msg(message, results))
-        # if tasks:
-        #     results = await openai_client.chat(session=session, tool_choice="none")
-        #     await send_msg(message, results)
-        settings.save()
-    except Exception as e:
-        logger.opt(exception=e).error(e)
-        await message.send(f"发生了一些错误: {e}")
-    finally:
-        session.running = False
+    await handle_chat(openai, session, text=text, image_url=img_url)
 
 
 # 以下是tts部分

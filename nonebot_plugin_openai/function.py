@@ -34,7 +34,7 @@ class ToolsFunction(BaseModel):
     def save(self) -> None:
         if not self.file_path.is_file():
             os.makedirs(self.file_path.parent, exist_ok=True)
-        self.file_path.write_text(self.json(indent=4), encoding="utf-8")
+        self.file_path.write_text(self.json(indent=4, exclude_none=True), encoding="utf-8")
 
     @root_validator(pre=True)
     def init(cls, values: Dict[str, Any]) -> Dict[str, Any]:
@@ -159,7 +159,6 @@ class ToolsFunction(BaseModel):
     async def call_tool(
         self,
         tool_call: ChatCompletionMessageToolCall,
-        session: Session,
         ctx: FuncContext[ToolCallConfig],
     ):
         tool = self.tools.get(tool_call.function.name)
@@ -167,10 +166,10 @@ class ToolsFunction(BaseModel):
             kwargs = json.loads(tool_call.function.arguments)
             kwargs["ctx"] = ctx
             result = await tool.func(**kwargs)
-            session.messages.append(
+            ctx.session.messages.append(
                 ChatCompletionToolMessageParam(
                     tool_call_id=tool_call.id,
-                    role="function",  # OpenAI中，使用tool会报错 Invalid parameter: messages with role 'tool' must be a response to a preceeding message with 'tool_calls'
+                    role="tool",
                     name=tool_call.function.name,
                     content=result.data,
                 )

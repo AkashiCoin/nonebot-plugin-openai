@@ -13,7 +13,9 @@ from openai.types.chat import (
     ChatCompletionContentPartTextParam,
     ChatCompletionFunctionMessageParam,
     ChatCompletionMessage,
+    ChatCompletion,
 )
+from openai._exceptions import APIStatusError
 from httpx import AsyncClient
 from pydantic import BaseModel
 from loguru import logger
@@ -56,27 +58,17 @@ class OpenAIClient:
         self,
         session: Session,
         prompt: str = "",
-        image_url: str = "",
         model: str = "",
+        image_url: str = "",
         tool_choice: Literal["none", "auto"] = "auto",
     ) -> List[Union[ToolCallRequest, ChatCompletionMessage]]:
         if not model:
             model = self.default_model
-        content = prompt
-        if image_url:
-            model = "gpt-4-vision-preview"
-            content = [
-                ChatCompletionContentPartTextParam(text=content, type="text"),
-                ChatCompletionContentPartImageParam(
-                    image_url=image_url,
-                    type="image_url",
-                ),
-            ]
-        if content:
+        if prompt:
             session.messages.append(
                 ChatCompletionUserMessageParam(
                     role="user",
-                    content=content,
+                    content=(prompt + f"\n![img]({image_url})") if image_url else prompt,
                 )
             )
         results = await self.chat_completions(
@@ -113,56 +105,35 @@ class OpenAIClient:
         chat_completion = await self.client.chat.completions.create(
             messages=messages,
             model=model,
-            tool_choice=None if vision else tool_choice,
-            tools=None if vision else self.tool_func.tools_info(),
+            tool_choice=None if vision or tool_choice == "none" else tool_choice,
+            tools=None
+            if vision or tool_choice == "none"  # 省 Tokens
+            else self.tool_func.tools_info(),
             user=session.user,
             max_tokens=1024 if vision else None,
         )
+        return self.make_chat_completion_results(session, chat_completion)
 
-        # 记录聊天完成内容
+    def make_chat_completion_results(
+        self, session: Session, chat_completion: ChatCompletion
+    ):
         logger.info(f"chat_comletion: {chat_completion}")
-
-        # 获取完成内容的选择
-        choices = chat_completion.choices
-
-        # 初始化结果列表
         results = []
-
-        # 遍历每个选择
+        results.append(chat_completion.usage)
+        choices = chat_completion.choices
         for choice in choices:
             if choice.message.role == "":
                 choice.message.role = "assistant"
             # 将选择的消息添加到结果列表中
             results.append(choice.message)
-
-            # 如果消息中包含工具调用
             if choice.message.tool_calls:
                 # 清空消息内容，防止OpenAI奇怪的报错
                 choice.message.content = ""
 
                 # 遍历每个工具调用
                 for tool_call in choice.message.tool_calls:
-                    config = self.tool_func.tool_config[tool_call.function.name]
-                    # 调用工具
-                    task = self.tool_func.call_tool(
-                        tool_call=tool_call,
-                        session=session,
-                        ctx=FuncContext[type(config)](
-                            session=session,
-                            openai_client=self.client,
-                            http_client=self.http_client,
-                            config=config,
-                        ),
-                    )
-
                     # 将工具调用请求添加到结果列表中
-                    results.append(
-                        ToolCallRequest(
-                            tool_call=tool_call,
-                            func=task,
-                            config=config,
-                        )
-                    )
+                    results.append(self.make_tool_request(session, tool_call))
 
             # 如果消息中包含函数调用
             if choice.message.function_call:
@@ -186,9 +157,26 @@ class OpenAIClient:
 
             # 将选择的消息添加到会话的消息列表中
             session.messages.append(choice.message)
-
-        # 返回结果列表
         return results
+
+    def make_tool_request(
+        self, session: Session, tool_call: ChatCompletionMessageToolCall
+    ):
+        config = self.tool_func.tool_config.get(tool_call.function.name)
+        task = self.tool_func.call_tool(
+            tool_call=tool_call,
+            ctx=FuncContext[type(config)](
+                session=session,
+                openai_client=self.client,
+                http_client=self.http_client,
+                config=config,
+            ),
+        )
+        return ToolCallRequest(
+            tool_call=tool_call,
+            func=task,
+            config=config,
+        )
 
     async def tts(
         self,
@@ -216,26 +204,35 @@ class OpenAIClient:
               the default.
         """
         logger.info(f"tts: {input} {model} {voice} {speed}")
-        if isinstance(speed, str):
-            speed = float(speed)
-        record = await self.client.audio.speech.create(
-            input=input, model=model, voice=voice, speed=speed
-        )
-        return ToolCallResponse(
+        resp = ToolCallResponse(
             name="tts",
             content_type="audio",
-            content=record.content,
-            data="success to generate audio, it has been send.",
+            content=None,
+            data="success to generate audio, it has been played.",
         )
+        if isinstance(speed, str):
+            speed = float(speed)
+        try:
+            record = await self.client.audio.speech.create(
+                input=input, model=model, voice=voice, speed=speed
+            )
+        except APIStatusError as e:
+            logger.error(f"TTS: {e}")
+            resp.data = f"failed to generate audio, {e.message}"
+            return resp
+        except Exception as e:
+            logger.error(f"TTS: {e}")
+            resp.data = f"failed to generate audio, {e}"
+            return resp
+        resp.content = record.content
+        return resp
 
     async def gen_image(
         self,
         prompt: str,
         model: Literal["dall-e-2", "dall-e-3"] = "dall-e-3",
         quality: Literal["standard", "hd"] = "standard",
-        size: Literal[
-            "256x256", "512x512", "1024x1024", "1792x1024", "1024x1792"
-        ] = "1024x1024",
+        size: Literal["1024x1024", "1792x1024", "1024x1792"] = "1024x1024",
         style: Literal["vivid", "natural"] = "vivid",
         ctx: FuncContext[ToolCallConfig] = None,
     ):
@@ -262,23 +259,92 @@ class OpenAIClient:
               images. This param is only supported for `dall-e-3`.
         """
         logger.info(f"gen_image: {prompt} {model} {quality} {size} {style}")
-        image_resp = await self.client.images.generate(
-            prompt=prompt,
-            n=1,
-            response_format="url",
-            model=model,
-            quality=quality,
-            size=size,
-            style=style,
-        )
         resp = ToolCallResponse(
             name="gen_image",
             content_type="openai_image",
             content=None,
             data="failed to generate image",
         )
+        try:
+            image_resp = await self.client.images.generate(
+                prompt=prompt,
+                n=1,
+                response_format="url",
+                model=model,
+                quality=quality,
+                size=size,
+                style=style,
+            )
+        except APIStatusError as e:
+            logger.error(f"DALL-E: {e}")
+            resp.data = f"failed to generate image, {e.message}"
+            return resp
+        except Exception as e:
+            logger.error(f"DALL-E: {e}")
+            resp.data = f"failed to generate image, {e}"
+            return resp
         if image_resp.created:
             data = image_resp.data[0]
             resp.data = data.revised_prompt
             resp.content = data
+        return resp
+
+    async def vision(
+        self,
+        text: str,
+        url: str,
+        ctx: FuncContext[ToolCallConfig] = None,
+    ):
+        """
+        This method is used to analyze an image using OpenAI's GPT-4 Vision model.
+
+        Args:
+            text (str): The text to be used as context for the image analysis.
+            url (str): The URL of the image to be analyzed.
+
+        Returns:
+            ToolCallResponse: The response from the tool call, containing the analysis result.
+
+        Raises:
+            APIStatusError: If there is an error with the API status.
+            Exception: If there is a general error.
+        """
+        logger.info(f"Vision: {text} {url}")
+        resp = ToolCallResponse(
+            name="vision",
+            content_type="str",
+            content=None,
+            data="failed to analyze image",
+        )
+        try:
+            analyze_resp = await self.client.chat.completions.create(
+                messages=[
+                    ChatCompletionUserMessageParam(
+                        role="user",
+                        content=[
+                            ChatCompletionContentPartTextParam(
+                                text=text,
+                                type="text",
+                            ),
+                            ChatCompletionContentPartImageParam(
+                                image_url=url,
+                                type="image_url",
+                            ),
+                        ],
+                    ),
+                ],
+                model="gpt-4-vision-preview",
+                max_tokens=1024,
+            )
+        except APIStatusError as e:
+            logger.error(f"Vision: {e}")
+            resp.data = f"failed to analyze image, {e.message}"
+            return resp
+        except Exception as e:
+            logger.error(f"Vision: {e}")
+            resp.data = f"failed to analyze image, {e}"
+            return resp
+        if analyze_resp.created:
+            data = analyze_resp.choices[0].message
+            resp.data = data.content
         return resp

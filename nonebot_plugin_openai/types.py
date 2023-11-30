@@ -19,17 +19,25 @@ class Channel(BaseModel):
 
 
 class ToolCallResponse:
-    name: str
-    content_type: Literal["str", "openai_image", "image", "audio"]  # 发送给用户内容的格式
-    content: Optional[Union[Any, str, Image, bytes, Path]]  # 用于发送给用户的内容
-    data: str  # 用于回复给openai的内容
+    """
+    ToolCallResponse 是一个工具调用响应类，用于封装工具调用的响应内容。
+
+    Attributes:
+        name (str): 工具的名称。
+
+        content_type (Literal["str", "openai_image", "image", "audio"]): 发送给用户内容的格式。
+
+        content (Optional[Union[Any, str, Image, bytes, Path]]): 用于发送给用户的内容。
+
+        data (Optional[str]): 用于回复给openai的内容。
+    """
 
     def __init__(
         self,
         name: str,
         content_type: Literal["str", "openai_image", "image", "audio"],
-        content: Optional[Union[Any, str, Image, bytes, Path]],
-        data: str,
+        content: Optional[Union[Any, str, Image, bytes, Path]] = None,
+        data: Optional[str] = None,
     ):
         self.name = name
         self.content_type = content_type
@@ -43,10 +51,19 @@ class ToolCallConfig(BaseModel):
 
 
 class ToolCall:
-    name: str
-    func: Callable[..., Coroutine[Any, Any, ToolCallResponse]]
-    func_info: dict
-    config: ToolCallConfig
+    """
+    ToolCall类用于封装工具调用的相关信息。
+
+    Attributes:
+        name (str): 工具的名称。
+
+        func (Callable[..., Coroutine[Any, Any, ToolCallResponse]]): 
+            工具的函数，它是一个可以接受任意参数的协程函数，返回一个ToolCallResponse对象。
+
+        func_info (dict): 关于工具函数的额外信息。
+
+        config (ToolCallConfig): 工具的配置信息。
+    """
 
     def __init__(
         self,
