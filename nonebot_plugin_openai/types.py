@@ -88,6 +88,7 @@ class Session(BaseModel):
     user: str = ""
     preset: Optional[Preset] = None
     max_length: int = 8
+    running: bool = False
 
     def get_messages(self, preset: Preset = None):
         if self.preset:

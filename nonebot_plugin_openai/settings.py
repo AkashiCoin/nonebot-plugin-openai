@@ -70,4 +70,3 @@ class Settings(BaseModel):
 
 
 settings = Settings()
-settings.save()

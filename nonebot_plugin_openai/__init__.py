@@ -9,9 +9,9 @@ import sys
 import time
 
 from argparse import Namespace
-from typing import Coroutine
+from typing import Any, AsyncGenerator, Coroutine, List, Union
 from loguru import logger
-from nonebot import on_command, on_shell_command, get_driver
+from nonebot import on_command, on_shell_command, get_driver, on_message
 from nonebot.adapters.onebot.v11 import (
     Bot,
     MessageEvent,
@@ -19,13 +19,13 @@ from nonebot.adapters.onebot.v11 import (
     GroupMessageEvent,
     MessageSegment,
 )
+from nonebot.matcher import Matcher
 from nonebot.plugin import PluginMetadata, inherit_supported_adapters
 from nonebot.adapters.onebot.v11.helpers import HandleCancellation
-from nonebot.params import CommandArg, ShellCommandArgs
+from nonebot.params import CommandArg, ShellCommandArgs, Depends
 from nonebot.rule import ArgumentParser
 from nonebot.permission import SUPERUSER
 from nonebot.typing import T_State
-from nonebot.drivers import Driver
 
 from openai.types.chat import ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
@@ -64,6 +64,8 @@ driver = get_driver()
 @driver.on_startup
 async def load_func():
     from importlib import reload
+    for session in settings.sessions.values():
+        session.running = False
     tools_func.register(openai_client.tts, ToolCallConfig(name="TTS"))
     tools_func.register(openai_client.gen_image, ToolCallConfig(name="DALL-E"))
     # 从config.openai_data_path配置的文件夹中的func文件夹中读取出所有开头为func的文件名
@@ -93,6 +95,22 @@ async def load_func():
         else:
             importlib.import_module(module)
     tools_func.save()
+    settings.save()
+
+
+def single_run_locker() -> Any:
+    async def check_running(
+        matcher: Matcher, event: MessageEvent
+    ) -> AsyncGenerator[None, None]:
+        session = settings.get_session(event)
+        if session.running:
+            await matcher.finish(
+                "我知道你很急，但你先别急", reply_message=True
+            )
+        yield
+
+    return Depends(check_running)
+
 
 openai_parser = ArgumentParser(description="Openai指令")
 openai_parser.add_argument("text", nargs="*", help="指令文本")
@@ -109,7 +127,7 @@ openai_parser.add_argument("-m", "--model", help="自定义模型", default=conf
 openai = on_shell_command("openai", aliases=set(["op"]), parser=openai_parser)
 
 
-@openai.handle()
+@openai.handle(parameterless=[single_run_locker()])
 async def _(bot: Bot, event: MessageEvent, args: Namespace = ShellCommandArgs()):
     await handle_command(bot, event, args)
     session = settings.get_session(event)
@@ -120,6 +138,7 @@ async def _(bot: Bot, event: MessageEvent, args: Namespace = ShellCommandArgs())
     img_url = get_message_img(event)
     results = []
     try:
+        session.running = True
         results = await openai_client.chat(session, prompt=text, model=args.model, image_url=img_url)
         tasks = []
         for result in results:
@@ -135,6 +154,8 @@ async def _(bot: Bot, event: MessageEvent, args: Namespace = ShellCommandArgs())
     except Exception as e:
         logger.opt(exception=e).error(e)
         await openai.send(f"发生了一些错误: {e}")
+    finally:
+        session.running = False
 
 
 async def handle_command(bot: Bot, event: MessageEvent, args: Namespace):
@@ -236,7 +257,7 @@ async def handle_command(bot: Bot, event: MessageEvent, args: Namespace):
                 await openai.finish("参数错误。")
 
 
-async def send_msg(matcher, results):
+async def send_msg(matcher: Matcher, results: List[Union[ChatCompletionMessage, ToolCallResponse, Exception]]):
     for result in results:
         if isinstance(result, ChatCompletionMessage):
             if result.content:
@@ -252,6 +273,40 @@ async def send_msg(matcher, results):
                 await matcher.send(MessageSegment.image(result.content))
         elif isinstance(result, Exception):
             await matcher.send(f"发生了一些错误：{result}")
+
+
+message = on_message(priority=5, block=True)
+
+
+@message.handle(parameterless=[single_run_locker()])
+async def _(bot: Bot, event: MessageEvent):
+    session = settings.get_session(event)
+    preset = session.preset
+    text = event.get_plaintext().strip()
+    if preset and preset.name in text:
+        img_url = get_message_img(event)
+        results = []
+        try:
+            session.running = True
+            results = await openai_client.chat(session, prompt=text, image_url=img_url)
+            tasks = []
+            for result in results:
+                if isinstance(result, ToolCallRequest):
+                    await message.send(f"[Function] 开始调用 {result.config.name} ...")
+                    tasks.append(result.func)
+            results.extend(await asyncio.gather(*tasks, return_exceptions=True))
+            asyncio.ensure_future(send_msg(message, results))
+            # if tasks:
+            #     results = await openai_client.chat(session=session, tool_choice="none")
+            #     await send_msg(message, results)
+            settings.save()
+        except Exception as e:
+            logger.opt(exception=e).error(e)
+            await message.send(f"发生了一些错误: {e}")
+        finally:
+            session.running = False
+    else:
+        return False
 
 
 # 以下是tts部分

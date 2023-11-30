@@ -3,7 +3,7 @@ from io import BytesIO
 import json
 import random
 
-from typing import List, Literal, Dict
+from typing import List, Literal, Dict, Union
 from openai import AsyncOpenAI
 from openai.types.chat import (
     ChatCompletionMessageToolCall,
@@ -12,6 +12,7 @@ from openai.types.chat import (
     ChatCompletionUserMessageParam,
     ChatCompletionContentPartTextParam,
     ChatCompletionFunctionMessageParam,
+    ChatCompletionMessage,
 )
 from httpx import AsyncClient
 from pydantic import BaseModel
@@ -58,7 +59,7 @@ class OpenAIClient:
         image_url: str = "",
         model: str = "",
         tool_choice: Literal["none", "auto"] = "auto",
-    ):
+    ) -> List[Union[ToolCallRequest, ChatCompletionMessage]]:
         if not model:
             model = self.default_model
         content = prompt
@@ -88,7 +89,7 @@ class OpenAIClient:
         session: Session,
         model="gpt-3.5-turbo",
         tool_choice: Literal["none", "auto"] = "auto",
-    ):
+    ) -> List[Union[ToolCallRequest, ChatCompletionMessage]]:
         """
         该函数用于生成聊天的完成内容。
 
@@ -146,7 +147,7 @@ class OpenAIClient:
                     task = self.tool_func.call_tool(
                         tool_call=tool_call,
                         session=session,
-                        ctx=FuncContext[type[config]](
+                        ctx=FuncContext[type(config)](
                             session=session,
                             openai_client=self.client,
                             http_client=self.http_client,

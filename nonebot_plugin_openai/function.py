@@ -70,9 +70,11 @@ class ToolsFunction(BaseModel):
         logger.info(f"[Function] 注册 {config.name} 函数 {func_name} 成功.")
 
     def tool_names(self):
-        return list(self.tools.keys()).extend(
+        tool_names = list(self.tools.keys())
+        tool_names.extend(
             [tool.config.name for tool in self.tools.values()]
         )
+        return tool_names
 
     def get_tool_from_name(self, name: str) -> Optional[ToolCall]:
         if name in self.tools:
