@@ -63,6 +63,11 @@ class Settings(BaseModel):
             session.max_length = config.openai_chat_max_length
         return self.sessions[_id]
 
+    def clear_messages(self, event: MessageEvent):
+        _id = event.get_session_id()
+        if self.sessions.get(_id):
+            self.sessions.get(_id).messages.clear()
+
     def del_session(self, event: MessageEvent):
         _id = event.get_session_id()
         if self.sessions.get(_id):

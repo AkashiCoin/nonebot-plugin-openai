@@ -278,35 +278,43 @@ async def send_msg(matcher: Matcher, results: List[Union[ChatCompletionMessage, 
 message = on_message(priority=5, block=True)
 
 
-@message.handle(parameterless=[single_run_locker()])
-async def _(bot: Bot, event: MessageEvent):
+@message.handle()
+async def pre_check(event: MessageEvent, state: T_State):
     session = settings.get_session(event)
     preset = session.preset
     text = event.get_plaintext().strip()
     if preset and preset.name in text:
-        img_url = get_message_img(event)
-        results = []
-        try:
-            session.running = True
-            results = await openai_client.chat(session, prompt=text, image_url=img_url)
-            tasks = []
-            for result in results:
-                if isinstance(result, ToolCallRequest):
-                    await message.send(f"[Function] 开始调用 {result.config.name} ...")
-                    tasks.append(result.func)
-            results.extend(await asyncio.gather(*tasks, return_exceptions=True))
-            asyncio.ensure_future(send_msg(message, results))
-            # if tasks:
-            #     results = await openai_client.chat(session=session, tool_choice="none")
-            #     await send_msg(message, results)
-            settings.save()
-        except Exception as e:
-            logger.opt(exception=e).error(e)
-            await message.send(f"发生了一些错误: {e}")
-        finally:
-            session.running = False
+        state["text"] = text
+        return True
     else:
-        return False
+        return await message.finish()
+
+
+@message.got("text", parameterless=[single_run_locker()])
+async def _(event: MessageEvent, state: T_State):
+    session = settings.get_session(event)
+    text = state["text"]
+    img_url = get_message_img(event)
+    results = []
+    try:
+        session.running = True
+        results = await openai_client.chat(session, prompt=text, image_url=img_url)
+        tasks = []
+        for result in results:
+            if isinstance(result, ToolCallRequest):
+                await message.send(f"[Function] 开始调用 {result.config.name} ...")
+                tasks.append(result.func)
+        results.extend(await asyncio.gather(*tasks, return_exceptions=True))
+        asyncio.ensure_future(send_msg(message, results))
+        # if tasks:
+        #     results = await openai_client.chat(session=session, tool_choice="none")
+        #     await send_msg(message, results)
+        settings.save()
+    except Exception as e:
+        logger.opt(exception=e).error(e)
+        await message.send(f"发生了一些错误: {e}")
+    finally:
+        session.running = False
 
 
 # 以下是tts部分
