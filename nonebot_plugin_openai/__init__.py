@@ -283,7 +283,7 @@ async def send_msg(
     matcher: Matcher,
     results: List[Union[ChatCompletionMessage, ToolCallResponse, Exception]],
 ):
-    for result in results:
+    for result in results[:]:
         results.remove(result)
         if isinstance(result, ChatCompletionMessage):
             if result.content:
@@ -310,27 +310,28 @@ async def send_msg(
             results.append(result)
 
 
-message = on_message(priority=5, block=True)
+message = on_message(priority=5, block=False)
 
 
 @message.handle()
-async def pre_check(event: MessageEvent, state: T_State):
+async def pre_check(matcher: Matcher, event: MessageEvent, state: T_State):
     session = settings.get_session(event)
     preset = session.preset
     text = event.get_plaintext().strip()
     if preset and preset.name in text:
         state["text"] = text
+        matcher.stop_propagation()
         return True
     else:
-        return await message.finish()
+        return await matcher.finish()
 
 
 @message.got("text", parameterless=[single_run_locker()])
-async def _(event: MessageEvent, state: T_State):
+async def _(matcher: Matcher, event: MessageEvent, state: T_State):
     session = settings.get_session(event)
     text = state["text"]
     img_url = get_message_img(event)
-    await handle_chat(openai, session, text=text, image_url=img_url)
+    await handle_chat(matcher, session, text=text, image_url=img_url)
 
 
 # 以下是tts部分
