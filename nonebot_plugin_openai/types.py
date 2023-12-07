@@ -3,12 +3,24 @@ from pathlib import Path
 import httpx
 from openai import AsyncOpenAI
 from openai.types.chat import (
+    ChatCompletionMessage,
     ChatCompletionMessageParam,
     ChatCompletionMessageToolCall,
     ChatCompletionSystemMessageParam,
 )
 from openai.types.image import Image
-from typing import Any, Callable, Coroutine, Generic, List, Literal, Optional, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Coroutine,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    TypeVar,
+    Union,
+)
 from pydantic import BaseModel
 
 
@@ -57,7 +69,7 @@ class ToolCall:
     Attributes:
         name (str): 工具的名称。
 
-        func (Callable[..., Coroutine[Any, Any, ToolCallResponse]]): 
+        func (Callable[..., Coroutine[Any, Any, ToolCallResponse]]):
             工具的函数，它是一个可以接受任意参数的协程函数，返回一个ToolCallResponse对象。
 
         func_info (dict): 关于工具函数的额外信息。
@@ -101,7 +113,7 @@ class Preset(BaseModel):
 
 class Session(BaseModel):
     id: str
-    messages: List[ChatCompletionMessageParam] = []
+    messages: List[Union[ChatCompletionMessage, ChatCompletionMessageParam]] = []
     user: str = ""
     preset: Optional[Preset] = None
     max_length: int = 8
@@ -115,10 +127,17 @@ class Session(BaseModel):
             _preset = [
                 ChatCompletionSystemMessageParam(content=preset.prompt, role="system")
             ]
-        return _preset + self.messages[-self.max_length :]
+        split_length = self.max_length
+        while (
+            split_length < len(self.messages)
+            and isinstance(self.messages[-split_length], dict)
+            and self.messages[-split_length]["role"] == "tool"
+        ):
+            split_length += 1
+        return _preset + self.messages[-split_length:]
 
 
-T = TypeVar('T', bound=ToolCallConfig)
+T = TypeVar("T", bound=ToolCallConfig)
 
 
 class FuncContext(Generic[T]):

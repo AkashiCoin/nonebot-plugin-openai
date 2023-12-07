@@ -11,13 +11,13 @@ import time
 from argparse import Namespace
 from typing import Any, AsyncGenerator, Coroutine, List, Union
 from loguru import logger
-from nonebot import on_command, on_shell_command, get_driver, on_message
+from nonebot import on_command, on_shell_command, get_driver, on_message, get_bot
 from nonebot.adapters.onebot.v11 import (
     Bot,
     MessageEvent,
-    Message,
-    GroupMessageEvent,
     MessageSegment,
+    GroupMessageEvent,
+    PrivateMessageEvent,
 )
 from nonebot.matcher import Matcher
 from nonebot.plugin import PluginMetadata, inherit_supported_adapters
@@ -139,10 +139,14 @@ async def _(bot: Bot, event: MessageEvent, args: Namespace = ShellCommandArgs())
         if isinstance(arg, str):
             text += arg + " "
     img_url = get_message_img(event)
-    await handle_chat(openai, session, text=text, model=args.model, image_url=img_url)
+    await handle_chat(
+        bot, event, openai, session, text=text, model=args.model, image_url=img_url
+    )
 
 
 async def handle_chat(
+    bot: Bot,
+    event: MessageEvent,
     matcher: Matcher,
     session: Session,
     text: str = "",
@@ -161,17 +165,20 @@ async def handle_chat(
             if isinstance(result, ToolCallRequest):
                 await matcher.send(f"[Function] 开始调用 {result.config.name} ...")
                 tasks.append(result.func)
+        asyncio.ensure_future(send_msg(bot, event, matcher, results))
         results.extend(await asyncio.gather(*tasks, return_exceptions=True))
-        asyncio.ensure_future(send_msg(matcher, results))
+        asyncio.ensure_future(send_msg(bot, event, matcher, results))
         for result in results:
             if isinstance(result, ToolCallResponse) and result.data:
                 results = await openai_client.chat(session=session, model=model)
-                await send_msg(matcher, results)
+                await send_msg(bot, event, matcher, results)
                 break
         else:
             results = []
         if results:
-            await handle_chat(matcher, session, model=model, results=results)
+            await handle_chat(
+                bot, event, matcher, session, model=model, results=results
+            )
     except Exception as e:
         logger.opt(exception=e).error(e)
         await openai.send(f"发生了一些错误: {e}")
@@ -280,41 +287,78 @@ async def handle_command(bot: Bot, event: MessageEvent, args: Namespace):
 
 
 async def send_msg(
+    bot: Bot,
+    event: MessageEvent,
     matcher: Matcher,
     results: List[Union[ChatCompletionMessage, ToolCallResponse, Exception]],
 ):
+    forward_messages = []
+    text_messages = []
+    user_id = event.get_user_id()
+    nickname = event.sender.nickname
+
+    def init_node(content):
+        return MessageSegment.node_custom(
+            user_id=user_id,
+            nickname=nickname,
+            content=content,
+        )
+
     for result in results[:]:
         results.remove(result)
         if isinstance(result, ChatCompletionMessage):
             if result.content:
-                await matcher.send(result.content)
+                text_messages.append(result.content)
         elif isinstance(result, ToolCallResponse):
             if result.content:
                 if result.content_type == "str":
-                    await matcher.send(result.content)
+                    forward_messages.append(init_node(result.content))
                 elif result.content_type == "audio":
-                    await matcher.send(MessageSegment.record(result.content))
-                elif result.content_type == "openai_image":
                     await matcher.send(
-                        MessageSegment.image(result.content.url)
-                        + "\n"
-                        + result.content.revised_prompt
+                        MessageSegment.record(result.content), reply_message=True
+                    )
+                elif result.content_type == "openai_image":
+                    forward_messages.append(
+                        init_node(
+                            MessageSegment.image(result.content.url)
+                            + "\n"
+                            + result.content.revised_prompt
+                        )
                     )
                 elif result.content_type == "image":
-                    await matcher.send(MessageSegment.image(result.content))
+                    forward_messages.append(
+                        init_node(MessageSegment.image(result.content))
+                    )
         elif isinstance(result, Exception):
-            await matcher.send(f"发生了一些错误：{result}")
+            await matcher.send(f"发生了一些错误：{result}", reply_message=True)
         elif isinstance(result, CompletionUsage):
             logger.info(f"花费: {result}")
+            if text_messages:
+                text_messages.append(f"total_tokens: {result.total_tokens}")
         else:
             results.append(result)
+    if forward_messages:
+        if isinstance(event, GroupMessageEvent):
+            return await bot.call_api(
+                "send_group_forward_msg",
+                group_id=event.group_id,
+                messages=forward_messages,
+            )
+        elif isinstance(event, PrivateMessageEvent):
+            return await bot.call_api(
+                "send_private_forward_msg",
+                user_id=event.user_id,
+                messages=forward_messages,
+            )
+    if text_messages:
+        return await matcher.send("\n".join(text_messages), reply_message=True)
 
 
 message = on_message(priority=5, block=False)
 
 
 @message.handle()
-async def pre_check(matcher: Matcher, event: MessageEvent, state: T_State):
+async def pre_check(bot: Bot, matcher: Matcher, event: MessageEvent, state: T_State):
     session = settings.get_session(event)
     preset = session.preset
     text = event.get_plaintext().strip()
@@ -327,11 +371,11 @@ async def pre_check(matcher: Matcher, event: MessageEvent, state: T_State):
 
 
 @message.got("text", parameterless=[single_run_locker()])
-async def _(matcher: Matcher, event: MessageEvent, state: T_State):
+async def _(bot: Bot, matcher: Matcher, event: MessageEvent, state: T_State):
     session = settings.get_session(event)
     text = state["text"]
     img_url = get_message_img(event)
-    await handle_chat(matcher, session, text=text, image_url=img_url)
+    await handle_chat(bot, event, matcher, session, text=text, image_url=img_url)
 
 
 # 以下是tts部分
@@ -353,7 +397,9 @@ tts = on_shell_command("tts", priority=5, block=True, parser=tts_parser)
 
 
 @tts.handle()
-async def handle_tts(event: MessageEvent, args: Namespace = ShellCommandArgs()):
+async def handle_tts(
+    bot: Bot, event: MessageEvent, args: Namespace = ShellCommandArgs()
+):
     if not args.text:
         await tts.finish("请输入要转换为语音的文本。")
     msg = "".join(args.text)
@@ -367,8 +413,8 @@ async def handle_tts(event: MessageEvent, args: Namespace = ShellCommandArgs()):
     try:
         record = await openai_client.tts(msg, model=model, voice=voice, speed=speed)
     except Exception:
-        await tts.finish("语音转换失败，请稍后再试。")
-    await tts.send(MessageSegment.record(record.content))
+        await tts.finish("语音转换失败，请稍后再试。", reply_message=True)
+    await send_msg(bot, event, tts, [record])
 
 
 # 以下是dall-e部分
@@ -393,6 +439,7 @@ dalle = on_shell_command("dalle", priority=5, block=True, parser=dalle_parser)
 
 @dalle.handle()
 async def generate_image(
+    bot: Bot,
     event: MessageEvent,
     args: Namespace = ShellCommandArgs(),
 ):
@@ -404,6 +451,4 @@ async def generate_image(
     result = await openai_client.gen_image(
         " ".join(args.prompt), size=size, quality=quality, style=style
     )
-    await dalle.send(
-        MessageSegment.image(result.content.url) + "\n" + result.content.revised_prompt
-    )  # 将响应内容作为图片消息发送
+    await send_msg(bot, event, dalle, [result])

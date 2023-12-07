@@ -100,18 +100,39 @@ class OpenAIClient:
         if vision:
             messages = [messages[-1]]
             session.messages.pop()
-
-        # 创建聊天完成内容
-        chat_completion = await self.client.chat.completions.create(
-            messages=messages,
-            model=model,
-            tool_choice=None if vision or tool_choice == "none" else tool_choice,
-            tools=None
-            if vision or tool_choice == "none"  # 省 Tokens
-            else self.tool_func.tools_info(),
-            user=session.user,
-            max_tokens=1024 if vision else None,
-        )
+        max_retry = 3
+        for i in range(max_retry):
+            try:
+                # 创建聊天完成内容
+                chat_completion = await self.client.chat.completions.create(
+                    messages=messages,
+                    model=model,
+                    tool_choice=None if vision or tool_choice == "none" else tool_choice,
+                    tools=None
+                    if vision or tool_choice == "none"  # 省 Tokens
+                    else self.tool_func.tools_info(),
+                    user=session.user,
+                    max_tokens=1024 if vision else None,
+                )
+                break
+            except APIStatusError as e:
+                logger.error(f"请求聊天出错: {e}")
+                if i == max_retry - 1:
+                    return [
+                        ChatCompletionMessage(
+                            role="assistant",
+                            content=f"请求聊天出错: {e.message}",
+                        )
+                    ]
+            except Exception as e:
+                logger.error(f"请求聊天出错: {e}")
+        else:
+            return [
+                ChatCompletionMessage(
+                    role="assistant",
+                    content="请求聊天出错",
+                )
+            ]
         return self.make_chat_completion_results(session, chat_completion)
 
     def make_chat_completion_results(
@@ -119,7 +140,6 @@ class OpenAIClient:
     ):
         logger.info(f"chat_comletion: {chat_completion}")
         results = []
-        results.append(chat_completion.usage)
         choices = chat_completion.choices
         for choice in choices:
             if choice.message.role == "":
@@ -157,6 +177,7 @@ class OpenAIClient:
 
             # 将选择的消息添加到会话的消息列表中
             session.messages.append(choice.message)
+        results.append(chat_completion.usage)
         return results
 
     def make_tool_request(
@@ -208,7 +229,7 @@ class OpenAIClient:
             name="tts",
             content_type="audio",
             content=None,
-            data="success to generate audio, it has been played.",
+            data="success to generate audio, it has been display.",
         )
         if isinstance(speed, str):
             speed = float(speed)
@@ -285,18 +306,18 @@ class OpenAIClient:
             return resp
         if image_resp.created:
             data = image_resp.data[0]
-            resp.data = data.revised_prompt
+            resp.data = f"success generate image and it had been display, here is revised prompt of this image: {data.revised_prompt}" 
             resp.content = data
         return resp
 
     async def vision(
         self,
-        text: str,
         url: str,
+        text: str = "Analyze this picture",
         ctx: FuncContext[ToolCallConfig] = None,
     ):
         """
-        This method is used to analyze an image using OpenAI's GPT-4 Vision model.
+        This function is designed to analyze an image using a chat completion and return the analysis results.
 
         Args:
             text (str): The text to be used as context for the image analysis.
