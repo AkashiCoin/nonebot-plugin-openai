@@ -327,7 +327,9 @@ class OpenAIClient:
                                 type="text",
                             ),
                             ChatCompletionContentPartImageParam(
-                                image_url=url,
+                                image_url={
+                                    "url": url
+                                },
                                 type="image_url",
                             ),
                         ],
